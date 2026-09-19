@@ -182,6 +182,29 @@ The driver generates a UUID as the QNB `OrderId` for every attempt and records i
 `gateway_transaction_id`. Follow-up operations and reconciliation are keyed on that value,
 not on the merchant reference.
 
+## What the Driver Records
+
+QNB answers every operation with the same record, and the driver stores it whole on
+`payline_transactions.metadata`. Payline merges it into the metadata the application
+supplied, so both survive.
+
+| Field | Use |
+|-------|-----|
+| `BatchNo`, `ReqDate`, `SysDate` | Which batch the sale landed in. A cancellation in the same batch is a `Void`, a later one is a `Refund` |
+| `RRN`, `F37`, `HostRefNum` | The reference the bank and the card scheme share |
+| `AuthCode`, `AuthId`, `TerminalID` | Authorisation identifiers |
+| `CardMask`, `CardType`, `DsBrand`, `Eci` | Card and 3D Secure detail |
+| `VoidDate`, `VoidTime`, `VoidUserCode` | Set once the order has been cancelled |
+| `RefundedAmount`, `RefundedPoint` | How much of the order has been returned |
+
+A callback whose hash does not verify records nothing at all.
+
+`queryPayment()` adds `refund_state` to that metadata, one of `none`, `partial`,
+`refunded` or `unknown`. It comes from `RefundedAmount` against `PurchAmount`, and falls
+back to the `IsRefunded` flag the integration document describes. The status of the queried
+transaction is unaffected: in Payline a refund is its own transaction, so a returned sale
+stays `successful` and the refund is recorded separately.
+
 ## Testing
 
 ```bash

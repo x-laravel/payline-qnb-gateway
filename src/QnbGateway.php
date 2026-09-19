@@ -143,6 +143,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
         $authCode = $post['AuthCode'] ?? null;
         $procCode = $post['ProcReturnCode'] ?? '';
         $errMsg = $post['ErrMsg'] ?? null;
+        $currency = $this->isoCurrency($post['Currency'] ?? null);
 
         if (($post['3DStatus'] ?? '0') !== '1') {
             return new PaymentResponse(
@@ -152,8 +153,10 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
                 gatewayTransactionId: $orderId,
                 gatewayOrderId: $hostRefNum,
                 gatewayResponseCode: $procCode,
+                currency: $currency,
                 errorCode: '3DS_FAILED',
                 errorMessage: $errMsg ?? '3D Secure verification failed.',
+                metadata: $post,
             );
         }
 
@@ -166,8 +169,10 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
                 gatewayOrderId: $hostRefNum,
                 gatewayAuthCode: $authCode,
                 gatewayResponseCode: $procCode,
+                currency: $currency,
                 errorCode: $procCode,
                 errorMessage: $errMsg ?? 'Payment failed.',
+                metadata: $post,
             );
         }
 
@@ -181,6 +186,8 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             gatewayOrderId: $hostRefNum,
             gatewayAuthCode: $authCode,
             gatewayResponseCode: $procCode,
+            currency: $currency,
+            metadata: $post,
             expiresAt: $authorization ? now()->addDays(self::PRE_AUTH_CAPTURE_DAYS) : null,
         );
     }
@@ -218,7 +225,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
         $procCode = $data['ProcReturnCode'] ?? '';
 
         $status = match (true) {
-            $this->isTrue($data['IsVoided'] ?? null) => TransactionStatus::Voided,
+            $this->isVoided($data) => TransactionStatus::Voided,
             $procCode === '00' => $type === TransactionType::Authorization
                 ? TransactionStatus::Authorized
                 : TransactionStatus::Successful,
@@ -235,7 +242,8 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             gatewayAuthCode: $data['AuthCode'] ?? null,
             gatewayResponseCode: $procCode,
             gatewayResponseMessage: $data['ErrMsg'] ?? null,
-            metadata: $data ?: null,
+            currency: $this->isoCurrency($data['Currency'] ?? null),
+            metadata: $this->withRefundState($data),
         );
     }
 
@@ -400,9 +408,46 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             : TransactionType::Payment;
     }
 
-    private function isTrue(mixed $value): bool
+    private function isVoided(array $data): bool
     {
-        return filter_var($value, FILTER_VALIDATE_BOOL);
+        if (isset($data['IsVoided'])) {
+            return filter_var($data['IsVoided'], FILTER_VALIDATE_BOOL);
+        }
+
+        return filled($data['VoidDate'] ?? null) || (int) ($data['VoidTime'] ?? 0) > 0;
+    }
+
+    private function withRefundState(array $data): ?array
+    {
+        if ($data === []) {
+            return null;
+        }
+
+        $refunded = $data['RefundedAmount'] ?? null;
+        $purchased = $data['PurchAmount'] ?? null;
+
+        if ($refunded === null || $purchased === null) {
+            $data['refund_state'] = filter_var($data['IsRefunded'] ?? false, FILTER_VALIDATE_BOOL)
+                ? 'refunded'
+                : 'unknown';
+
+            return $data;
+        }
+
+        $data['refund_state'] = match (true) {
+            (float) $refunded <= 0.0 => 'none',
+            (float) $refunded >= (float) $purchased => 'refunded',
+            default => 'partial',
+        };
+
+        return $data;
+    }
+
+    private function isoCurrency(?string $code): string
+    {
+        $iso = array_search($code, self::CURRENCIES, true);
+
+        return $iso === false ? 'TRY' : $iso;
     }
 
     private function formatAmount(int $amount): string

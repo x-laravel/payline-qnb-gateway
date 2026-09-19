@@ -337,6 +337,103 @@ class QnbGatewayTest extends TestCase
         $this->assertSame(TransactionStatus::Authorized, $response->status);
     }
 
+    public function test_query_payment_reads_a_void_date_when_the_voided_flag_is_absent(): void
+    {
+        Http::fake(['*' => Http::response([
+            'ProcReturnCode' => '00',
+            'TxnType' => 'Auth',
+            'VoidDate' => '20260920',
+            'VoidTime' => '1142',
+        ], 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Voided, $response->status);
+    }
+
+    public function test_query_payment_treats_an_empty_void_date_as_not_voided(): void
+    {
+        Http::fake(['*' => Http::response([
+            'ProcReturnCode' => '00',
+            'TxnType' => 'Auth',
+            'VoidDate' => null,
+            'VoidTime' => '0',
+        ], 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Successful, $response->status);
+    }
+
+    public function test_query_payment_reports_a_partial_refund(): void
+    {
+        Http::fake(['*' => Http::response([
+            'ProcReturnCode' => '00',
+            'TxnType' => 'Auth',
+            'PurchAmount' => '500',
+            'RefundedAmount' => '200',
+        ], 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Successful, $response->status);
+        $this->assertSame('partial', $response->metadata['refund_state']);
+    }
+
+    public function test_query_payment_reports_a_full_refund(): void
+    {
+        Http::fake(['*' => Http::response([
+            'ProcReturnCode' => '00',
+            'TxnType' => 'Auth',
+            'PurchAmount' => '500',
+            'RefundedAmount' => '500',
+        ], 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame('refunded', $response->metadata['refund_state']);
+    }
+
+    public function test_query_payment_reports_no_refund(): void
+    {
+        Http::fake(['*' => Http::response([
+            'ProcReturnCode' => '00',
+            'TxnType' => 'Auth',
+            'PurchAmount' => '500',
+            'RefundedAmount' => '0',
+        ], 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame('none', $response->metadata['refund_state']);
+    }
+
+    public function test_query_payment_falls_back_to_the_documented_refund_flag(): void
+    {
+        Http::fake(['*' => Http::response([
+            'ProcReturnCode' => '00',
+            'TxnType' => 'Auth',
+            'IsRefunded' => 'True',
+        ], 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame('refunded', $response->metadata['refund_state']);
+    }
+
+    public function test_query_payment_maps_the_currency_back_to_its_iso_code(): void
+    {
+        Http::fake(['*' => Http::response([
+            'ProcReturnCode' => '00',
+            'TxnType' => 'Auth',
+            'Currency' => '840',
+        ], 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame('USD', $response->currency);
+    }
+
     public function test_query_payment_stays_unknown_when_the_answer_cannot_be_read(): void
     {
         Http::fake(['*' => Http::response('', 500)]);
@@ -360,6 +457,76 @@ class QnbGatewayTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
 
         $this->gateway->pay($this->makePaymentRequest(currency: 'CHF'));
+    }
+
+    public function test_handleCallback_records_the_provider_envelope(): void
+    {
+        $post = $this->buildCallbackPayload('00', '1');
+        $post['BatchNo'] = '81';
+        $post['RRN'] = '626223244915';
+        $post['CardMask'] = '516840******3499';
+
+        $response = $this->gateway->handleCallback(new CallbackData(
+            gateway: 'qnb',
+            requestData: $post,
+        ));
+
+        $this->assertSame('81', $response->metadata['BatchNo']);
+        $this->assertSame('626223244915', $response->metadata['RRN']);
+        $this->assertSame('516840******3499', $response->metadata['CardMask']);
+    }
+
+    public function test_handleCallback_reads_the_currency_from_the_envelope(): void
+    {
+        $post = $this->buildCallbackPayload('00', '1');
+        $post['Currency'] = '978';
+
+        $response = $this->gateway->handleCallback(new CallbackData(
+            gateway: 'qnb',
+            requestData: $post,
+        ));
+
+        $this->assertSame('EUR', $response->currency);
+    }
+
+    public function test_handleCallback_falls_back_to_lira_for_an_unknown_currency_code(): void
+    {
+        $post = $this->buildCallbackPayload('00', '1');
+        $post['Currency'] = '000';
+
+        $response = $this->gateway->handleCallback(new CallbackData(
+            gateway: 'qnb',
+            requestData: $post,
+        ));
+
+        $this->assertSame('TRY', $response->currency);
+    }
+
+    public function test_handleCallback_records_the_envelope_on_a_declined_payment(): void
+    {
+        $post = $this->buildCallbackPayload('51', '1', 'Insufficient funds');
+        $post['BatchNo'] = '81';
+
+        $response = $this->gateway->handleCallback(new CallbackData(
+            gateway: 'qnb',
+            requestData: $post,
+        ));
+
+        $this->assertSame(TransactionStatus::Failed, $response->status);
+        $this->assertSame('81', $response->metadata['BatchNo']);
+    }
+
+    public function test_handleCallback_records_nothing_when_the_hash_does_not_match(): void
+    {
+        $post = $this->buildCallbackPayload('00', '1');
+        $post['ResponseHash'] = 'INVALID_HASH';
+
+        $response = $this->gateway->handleCallback(new CallbackData(
+            gateway: 'qnb',
+            requestData: $post,
+        ));
+
+        $this->assertNull($response->metadata);
     }
 
     public function test_refund_sends_correct_request_and_returns_refunded_status(): void
