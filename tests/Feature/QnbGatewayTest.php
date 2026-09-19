@@ -2,17 +2,21 @@
 
 namespace XLaravel\PaylineQnbDriver\Tests\Feature;
 
+use InvalidArgumentException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use XLaravel\Payline\Contracts\AuthorizesPayments;
 use XLaravel\Payline\Contracts\CapturesPayments;
 use XLaravel\Payline\Contracts\ChargesPayments;
 use XLaravel\Payline\Contracts\HandlesCallbacks;
 use XLaravel\Payline\Contracts\HandlesWebhooks;
+use XLaravel\Payline\Contracts\QueriesPayments;
 use XLaravel\Payline\Contracts\RefundsPayments;
 use XLaravel\Payline\Contracts\VoidsPayments;
 use XLaravel\Payline\DTOs\CallbackData;
 use XLaravel\Payline\DTOs\CaptureData;
 use XLaravel\Payline\DTOs\Card;
+use XLaravel\Payline\DTOs\PaymentQuery;
 use XLaravel\Payline\DTOs\PaymentRequest;
 use XLaravel\Payline\DTOs\RefundData;
 use XLaravel\Payline\DTOs\VoidData;
@@ -45,7 +49,6 @@ class QnbGatewayTest extends TestCase
 
         $this->assertSame(TransactionStatus::Pending, $response->status);
         $this->assertSame(TransactionType::Payment, $response->type);
-        $this->assertSame('ORD-001', $response->gatewayTransactionId);
         $this->assertNotNull($response->redirectForm);
         $this->assertTrue($response->requiresRedirect());
     }
@@ -89,7 +92,7 @@ class QnbGatewayTest extends TestCase
                 && $body['MerchantID'] === 'TEST_MERCHANT'
                 && $body['SecureType'] === '3DPay'
                 && $body['TxnType'] === 'Auth'
-                && $body['OrderId'] === 'ORD-001'
+                && Str::isUuid($body['OrderId'])
                 && $body['PurchAmount'] === '150.00'
                 && $body['Currency'] === '949'
                 && $body['InstallmentCount'] === '3';
@@ -182,6 +185,183 @@ class QnbGatewayTest extends TestCase
         $this->assertSame('Insufficient funds', $response->errorMessage);
     }
 
+    public function test_handleCallback_carries_no_identifier_when_the_hash_does_not_match(): void
+    {
+        $post = $this->buildCallbackPayload('00', '1');
+        $post['ResponseHash'] = 'INVALID_HASH';
+
+        $response = $this->gateway->handleCallback(new CallbackData(
+            gateway: 'qnb',
+            requestData: $post,
+        ));
+
+        $this->assertNull($response->gatewayTransactionId);
+        $this->assertNull($response->gatewayOrderId);
+    }
+
+    public function test_handleCallback_maps_a_preauth_to_an_authorization(): void
+    {
+        $post = $this->buildCallbackPayload('00', '1', txnType: 'PreAuth');
+
+        $response = $this->gateway->handleCallback(new CallbackData(
+            gateway: 'qnb',
+            requestData: $post,
+        ));
+
+        $this->assertSame(TransactionType::Authorization, $response->type);
+        $this->assertSame(TransactionStatus::Authorized, $response->status);
+    }
+
+    public function test_handleCallback_gives_an_authorization_a_twenty_five_day_capture_window(): void
+    {
+        $post = $this->buildCallbackPayload('00', '1', txnType: 'PreAuth');
+
+        $response = $this->gateway->handleCallback(new CallbackData(
+            gateway: 'qnb',
+            requestData: $post,
+        ));
+
+        $this->assertNotNull($response->expiresAt);
+        $this->assertSame(now()->addDays(25)->format('Y-m-d'), $response->expiresAt->format('Y-m-d'));
+    }
+
+    public function test_handleCallback_leaves_a_sale_without_an_expiry(): void
+    {
+        $post = $this->buildCallbackPayload('00', '1');
+
+        $response = $this->gateway->handleCallback(new CallbackData(
+            gateway: 'qnb',
+            requestData: $post,
+        ));
+
+        $this->assertSame(TransactionType::Payment, $response->type);
+        $this->assertNull($response->expiresAt);
+    }
+
+    public function test_handleCallback_keeps_the_operation_type_on_a_declined_preauth(): void
+    {
+        $post = $this->buildCallbackPayload('51', '1', 'Insufficient funds', 'PreAuth');
+
+        $response = $this->gateway->handleCallback(new CallbackData(
+            gateway: 'qnb',
+            requestData: $post,
+        ));
+
+        $this->assertSame(TransactionType::Authorization, $response->type);
+        $this->assertSame(TransactionStatus::Failed, $response->status);
+    }
+
+    public function test_pay_generates_a_distinct_order_id_per_attempt(): void
+    {
+        Http::fake(['*' => Http::response('<html>form</html>', 200)]);
+
+        $data = $this->makePaymentRequest();
+        $this->gateway->pay($data);
+        $this->gateway->pay($data);
+
+        $orderIds = [];
+
+        Http::assertSentCount(2);
+        Http::recorded(function ($request) use (&$orderIds) {
+            $orderIds[] = $request->data()['OrderId'];
+
+            return true;
+        });
+
+        $this->assertCount(2, array_unique($orderIds));
+    }
+
+    public function test_query_payment_reports_a_successful_sale(): void
+    {
+        Http::fake(['*' => Http::response([
+            'ProcReturnCode' => '00',
+            'TxnType' => 'Auth',
+            'IsVoided' => 'False',
+            'IsRefunded' => 'False',
+            'HostRefNum' => 'REF999',
+            'AuthCode' => 'AUTH456',
+        ], 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Successful, $response->status);
+        $this->assertSame(TransactionType::Payment, $response->type);
+        $this->assertSame('REF999', $response->gatewayOrderId);
+
+        Http::assertSent(function ($request) {
+            $body = $request->data();
+
+            return $body['SecureType'] === 'Inquiry'
+                && $body['TxnType'] === 'OrderInquiry'
+                && $body['OrgOrderId'] === 'ORD-001';
+        });
+    }
+
+    public function test_query_payment_reports_a_voided_sale(): void
+    {
+        Http::fake(['*' => Http::response([
+            'ProcReturnCode' => '00',
+            'TxnType' => 'Auth',
+            'IsVoided' => true,
+        ], 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Voided, $response->status);
+    }
+
+    public function test_query_payment_reads_a_string_voided_flag(): void
+    {
+        Http::fake(['*' => Http::response([
+            'ProcReturnCode' => '00',
+            'TxnType' => 'Auth',
+            'IsVoided' => 'True',
+        ], 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Voided, $response->status);
+    }
+
+    public function test_query_payment_reports_an_authorization_as_authorized(): void
+    {
+        Http::fake(['*' => Http::response([
+            'ProcReturnCode' => '00',
+            'TxnType' => 'PreAuth',
+            'IsVoided' => 'False',
+        ], 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionType::Authorization, $response->type);
+        $this->assertSame(TransactionStatus::Authorized, $response->status);
+    }
+
+    public function test_query_payment_stays_unknown_when_the_answer_cannot_be_read(): void
+    {
+        Http::fake(['*' => Http::response('', 500)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Unknown, $response->status);
+    }
+
+    public function test_query_payment_requires_the_provider_order_id(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->gateway->queryPayment(new PaymentQuery(reference: 'ORD-001'));
+    }
+
+    public function test_an_unsupported_currency_is_rejected(): void
+    {
+        Http::fake(['*' => Http::response('<html>form</html>', 200)]);
+
+        $this->expectException(InvalidArgumentException::class);
+
+        $this->gateway->pay($this->makePaymentRequest(currency: 'CHF'));
+    }
+
     public function test_refund_sends_correct_request_and_returns_refunded_status(): void
     {
         Http::fake(['*' => Http::response('ProcReturnCode=00&TxnResult=Success&HostRefNum=REF999', 200)]);
@@ -261,6 +441,7 @@ class QnbGatewayTest extends TestCase
         $this->assertInstanceOf(RefundsPayments::class, $this->gateway);
         $this->assertInstanceOf(VoidsPayments::class, $this->gateway);
         $this->assertInstanceOf(HandlesCallbacks::class, $this->gateway);
+        $this->assertInstanceOf(QueriesPayments::class, $this->gateway);
 
         $this->assertNotInstanceOf(HandlesWebhooks::class, $this->gateway);
     }
@@ -286,8 +467,12 @@ class QnbGatewayTest extends TestCase
         );
     }
 
-    private function buildCallbackPayload(string $procCode, string $threeDsStatus, string $errMsg = ''): array
-    {
+    private function buildCallbackPayload(
+        string $procCode,
+        string $threeDsStatus,
+        string $errMsg = '',
+        string $txnType = 'Auth',
+    ): array {
         $orderId = 'ORD-001';
         $authCode = 'AUTH456';
         $responseRnd = 'RND123456789';
@@ -306,6 +491,7 @@ class QnbGatewayTest extends TestCase
 
         return [
             'OrderId' => $orderId,
+            'TxnType' => $txnType,
             'AuthCode' => $authCode,
             'ProcReturnCode' => $procCode,
             '3DStatus' => $threeDsStatus,

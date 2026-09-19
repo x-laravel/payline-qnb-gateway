@@ -31,7 +31,7 @@ Add the `qnb` block to `config/payline.php` under `gateways`:
         'user_name'     => env('QNB_USER_NAME'),
         'password'      => env('QNB_PASSWORD'),
         'merchant_pass' => env('QNB_MERCHANT_PASS'),
-        'endpoint'      => env('QNB_ENDPOINT', 'https://vpostest.qnbfinansbank.com/Gateway/Default.aspx'),
+        'endpoint'      => env('QNB_ENDPOINT', 'https://vpostest.qnb.com.tr/Gateway/Default.aspx'),
         'lang'          => env('QNB_LANG', 'TR'),
     ],
 ],
@@ -47,11 +47,11 @@ QNB_MERCHANT_ID=your-merchant-id
 QNB_USER_NAME=your-user-name
 QNB_PASSWORD=your-password
 QNB_MERCHANT_PASS=your-merchant-pass
-QNB_ENDPOINT=https://vpos.qnbfinansbank.com/Gateway/Default.aspx
+QNB_ENDPOINT=https://vpos.qnb.com.tr/Gateway/Default.aspx
 ```
 
-> **Sandbox endpoint:** `https://vpostest.qnbfinansbank.com/Gateway/Default.aspx`  
-> **Production endpoint:** `https://vpos.qnbfinansbank.com/Gateway/Default.aspx`
+> **Sandbox endpoint:** `https://vpostest.qnb.com.tr/Gateway/Default.aspx`  
+> **Production endpoint:** `https://vpos.qnb.com.tr/Gateway/Default.aspx`
 
 ## Usage
 
@@ -87,7 +87,7 @@ if ($response->requiresRedirect()) {
 
 ### Handling the callback
 
-Payline handles the callback automatically via its built-in route (`/payline/callbacks/qnb`). After 3DS completes, QNB POSTs back to this URL. The driver verifies the response hash and the user is redirected to `payline.callback_success_url` or `payline.callback_failure_url`.
+Payline handles the callback automatically via its built-in route (`/payline/callback/qnb`). After 3DS completes, QNB POSTs back to this URL. The driver verifies the response hash and the user is redirected to `payline.callback_success_url` or `payline.callback_failure_url`.
 
 You can listen to the dispatched events for any post-payment logic:
 
@@ -163,17 +163,24 @@ Payline::via('qnb')->void(
 | USD      | 840      |
 | EUR      | 978      |
 | GBP      | 826      |
+| JPY      | 392      |
+| RUB      | 643      |
 
 ## Supported Operations
 
-| Operation   | Supported | Notes                                              |
-|-------------|-----------|---------------------------------------------------|
-| Pay (3DS)   | ✓         | Returns self-submitting HTML form (`redirectForm`) |
-| Authorize   | ✓         | PreAuth + 3DS flow                                 |
-| Capture     | ✓         | PostAuth via `OrgOrderId`                          |
-| Refund      | ✓         | Partial or full                                    |
-| Void/Cancel | ✓         |                                                    |
-| Webhooks    | ✗         | QNB uses callback-only flow                        |
+| Operation   | Supported | Notes |
+|-------------|-----------|-------|
+| Pay (3DS)   | ✓ | Returns a self-submitting HTML form (`redirectForm`) |
+| Authorize   | ✓ | PreAuth + 3DS flow, capture window is 25 days |
+| Capture     | ✓ | PostAuth via `OrgOrderId`, partial capture is TRY only |
+| Refund      | ✓ | Partial or full, must fall in a later batch than the sale |
+| Void/Cancel | ✓ | Must fall in the same batch as the sale |
+| Reconcile   | ✓ | `OrderInquiry`, keyed on the provider order id |
+| Webhooks    | ✗ | QNB uses a callback-only flow |
+
+The driver generates a UUID as the QNB `OrderId` for every attempt and records it as
+`gateway_transaction_id`. Follow-up operations and reconciliation are keyed on that value,
+not on the merchant reference.
 
 ## Testing
 

@@ -5,15 +5,18 @@ namespace XLaravel\PaylineQnbDriver;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use InvalidArgumentException;
 use XLaravel\Payline\Contracts\AuthorizesPayments;
 use XLaravel\Payline\Contracts\CapturesPayments;
 use XLaravel\Payline\Contracts\ChargesPayments;
 use XLaravel\Payline\Contracts\Gateway;
 use XLaravel\Payline\Contracts\HandlesCallbacks;
+use XLaravel\Payline\Contracts\QueriesPayments;
 use XLaravel\Payline\Contracts\RefundsPayments;
 use XLaravel\Payline\Contracts\VoidsPayments;
 use XLaravel\Payline\DTOs\CallbackData;
 use XLaravel\Payline\DTOs\CaptureData;
+use XLaravel\Payline\DTOs\PaymentQuery;
 use XLaravel\Payline\DTOs\PaymentRequest;
 use XLaravel\Payline\DTOs\PaymentResponse;
 use XLaravel\Payline\DTOs\RefundData;
@@ -22,14 +25,18 @@ use XLaravel\Payline\Enums\PaymentMethod;
 use XLaravel\Payline\Enums\TransactionStatus;
 use XLaravel\Payline\Enums\TransactionType;
 
-class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayments, Gateway, HandlesCallbacks, RefundsPayments, VoidsPayments
+class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayments, Gateway, HandlesCallbacks, QueriesPayments, RefundsPayments, VoidsPayments
 {
     private const array CURRENCIES = [
         'TRY' => '949',
         'USD' => '840',
         'EUR' => '978',
         'GBP' => '826',
+        'JPY' => '392',
+        'RUB' => '643',
     ];
+
+    private const int PRE_AUTH_CAPTURE_DAYS = 25;
 
     public function __construct(private readonly array $config) {}
 
@@ -68,7 +75,12 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             'Lang'        => $this->config['lang'] ?? 'TR',
         ]);
 
-        return $this->parseNonSecureResponse($response, TransactionType::Capture, $data->gatewayTransactionId);
+        return $this->parseNonSecureResponse(
+            $response,
+            TransactionType::Capture,
+            $data->gatewayTransactionId,
+            $data->currency,
+        );
     }
 
     public function refund(RefundData $data): PaymentResponse
@@ -86,7 +98,12 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             'Lang'        => $this->config['lang'] ?? 'TR',
         ]);
 
-        return $this->parseNonSecureResponse($response, TransactionType::Refund, $data->gatewayTransactionId);
+        return $this->parseNonSecureResponse(
+            $response,
+            TransactionType::Refund,
+            $data->gatewayTransactionId,
+            $data->currency,
+        );
     }
 
     public function void(VoidData $data): PaymentResponse
@@ -115,12 +132,12 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
                 status: TransactionStatus::Failed,
                 type: TransactionType::Payment,
                 gatewayName: $this->getName(),
-                gatewayTransactionId: $post['OrderId'] ?? null,
                 errorCode: 'HASH_MISMATCH',
                 errorMessage: 'Security verification failed.',
             );
         }
 
+        $type = $this->operationType($post['TxnType'] ?? '');
         $orderId = $post['OrderId'] ?? null;
         $hostRefNum = $post['HostRefNum'] ?? null;
         $authCode = $post['AuthCode'] ?? null;
@@ -130,7 +147,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
         if (($post['3DStatus'] ?? '0') !== '1') {
             return new PaymentResponse(
                 status: TransactionStatus::Failed,
-                type: TransactionType::Payment,
+                type: $type,
                 gatewayName: $this->getName(),
                 gatewayTransactionId: $orderId,
                 gatewayOrderId: $hostRefNum,
@@ -143,7 +160,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
         if ($procCode !== '00') {
             return new PaymentResponse(
                 status: TransactionStatus::Failed,
-                type: TransactionType::Payment,
+                type: $type,
                 gatewayName: $this->getName(),
                 gatewayTransactionId: $orderId,
                 gatewayOrderId: $hostRefNum,
@@ -154,23 +171,80 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             );
         }
 
+        $authorization = $type === TransactionType::Authorization;
+
         return new PaymentResponse(
-            status: TransactionStatus::Successful,
-            type: TransactionType::Payment,
+            status: $authorization ? TransactionStatus::Authorized : TransactionStatus::Successful,
+            type: $type,
             gatewayName: $this->getName(),
             gatewayTransactionId: $orderId,
             gatewayOrderId: $hostRefNum,
             gatewayAuthCode: $authCode,
             gatewayResponseCode: $procCode,
+            expiresAt: $authorization ? now()->addDays(self::PRE_AUTH_CAPTURE_DAYS) : null,
+        );
+    }
+
+    public function queryPayment(PaymentQuery $query): PaymentResponse
+    {
+        $orderId = $query->gatewayTransactionId
+            ?? throw new InvalidArgumentException('QNB requires the provider order id to query a payment.');
+
+        $response = Http::asForm()->post($this->config['endpoint'], [
+            'MbrId' => $this->config['mbr_id'],
+            'MerchantId' => $this->config['merchant_id'],
+            'UserCode' => $this->config['user_name'],
+            'UserPass' => $this->config['password'],
+            'SecureType' => 'Inquiry',
+            'TxnType' => 'OrderInquiry',
+            'OrgOrderId' => $orderId,
+            'Currency' => self::CURRENCIES['TRY'],
+            'Lang' => $this->config['lang'] ?? 'TR',
+        ]);
+
+        if (! $response->successful()) {
+            return new PaymentResponse(
+                status: TransactionStatus::Unknown,
+                type: TransactionType::Payment,
+                gatewayName: $this->getName(),
+                gatewayTransactionId: $orderId,
+                errorCode: (string) $response->status(),
+                errorMessage: 'Order inquiry failed.',
+            );
+        }
+
+        $data = $this->parseResponseBody($response->body());
+        $type = $this->operationType($data['TxnType'] ?? '');
+        $procCode = $data['ProcReturnCode'] ?? '';
+
+        $status = match (true) {
+            $this->isTrue($data['IsVoided'] ?? null) => TransactionStatus::Voided,
+            $procCode === '00' => $type === TransactionType::Authorization
+                ? TransactionStatus::Authorized
+                : TransactionStatus::Successful,
+            ($data['TxnResult'] ?? '') === 'Failed' => TransactionStatus::Failed,
+            default => TransactionStatus::Unknown,
+        };
+
+        return new PaymentResponse(
+            status: $status,
+            type: $type,
+            gatewayName: $this->getName(),
+            gatewayTransactionId: $orderId,
+            gatewayOrderId: $data['HostRefNum'] ?? null,
+            gatewayAuthCode: $data['AuthCode'] ?? null,
+            gatewayResponseCode: $procCode,
+            gatewayResponseMessage: $data['ErrMsg'] ?? null,
+            metadata: $data ?: null,
         );
     }
 
     private function initiate(PaymentRequest $data, string $txnType, TransactionType $type): PaymentResponse
     {
-        $card = $data->card ?? throw new \InvalidArgumentException('Card is required for QNB payment.');
+        $card = $data->card ?? throw new InvalidArgumentException('Card is required for QNB payment.');
 
         $rnd = Str::random(32);
-        $orderId = $data->reference;
+        $orderId = (string) Str::uuid();
         $installment = ($data->installments !== null && $data->installments > 1)
             ? (string) $data->installments
             : '0';
@@ -225,14 +299,19 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
         );
     }
 
-    private function parseNonSecureResponse(Response $response, TransactionType $type, string $orgOrderId): PaymentResponse
-    {
+    private function parseNonSecureResponse(
+        Response $response,
+        TransactionType $type,
+        string $orgOrderId,
+        ?string $currency = null,
+    ): PaymentResponse {
         if (! $response->successful()) {
             return new PaymentResponse(
                 status: TransactionStatus::Failed,
                 type: $type,
                 gatewayName: $this->getName(),
                 gatewayTransactionId: $orgOrderId,
+                currency: $currency ?? 'TRY',
                 errorCode: (string) $response->status(),
                 errorMessage: 'Request failed.',
             );
@@ -257,6 +336,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             gatewayAuthCode: $data['AuthCode'] ?? null,
             gatewayResponseCode: $procCode,
             gatewayResponseMessage: $data['ErrMsg'] ?? null,
+            currency: $currency ?? 'TRY',
             errorCode: $success ? null : $procCode,
             errorMessage: $success ? null : ($data['ErrMsg'] ?? 'Transaction failed.'),
             metadata: $data ?: null,
@@ -313,6 +393,18 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
         return $parsed ?: [];
     }
 
+    private function operationType(string $txnType): TransactionType
+    {
+        return $txnType === 'PreAuth'
+            ? TransactionType::Authorization
+            : TransactionType::Payment;
+    }
+
+    private function isTrue(mixed $value): bool
+    {
+        return filter_var($value, FILTER_VALIDATE_BOOL);
+    }
+
     private function formatAmount(int $amount): string
     {
         return number_format($amount / 100, 2, '.', '');
@@ -320,6 +412,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
 
     private function resolveCurrency(string $currency): string
     {
-        return self::CURRENCIES[$currency] ?? '949';
+        return self::CURRENCIES[strtoupper($currency)]
+            ?? throw new InvalidArgumentException("QNB does not support the currency [{$currency}].");
     }
 }
