@@ -3,6 +3,13 @@
 namespace XLaravel\PaylineQnbDriver\Tests\Feature;
 
 use Illuminate\Support\Facades\Http;
+use XLaravel\Payline\Contracts\AuthorizesPayments;
+use XLaravel\Payline\Contracts\CapturesPayments;
+use XLaravel\Payline\Contracts\ChargesPayments;
+use XLaravel\Payline\Contracts\HandlesCallbacks;
+use XLaravel\Payline\Contracts\HandlesWebhooks;
+use XLaravel\Payline\Contracts\RefundsPayments;
+use XLaravel\Payline\Contracts\VoidsPayments;
 use XLaravel\Payline\DTOs\CallbackData;
 use XLaravel\Payline\DTOs\CaptureData;
 use XLaravel\Payline\DTOs\Card;
@@ -185,7 +192,7 @@ class QnbGatewayTest extends TestCase
             currency: 'TRY',
         ));
 
-        $this->assertSame(TransactionStatus::Refunded, $response->status);
+        $this->assertSame(TransactionStatus::Successful, $response->status);
         $this->assertSame(TransactionType::Refund, $response->type);
 
         Http::assertSent(function ($request) {
@@ -246,9 +253,16 @@ class QnbGatewayTest extends TestCase
         $this->assertSame('qnb', $this->gateway->getName());
     }
 
-    public function test_verify_webhook_always_returns_true(): void
+    public function test_declares_only_the_operations_qnb_supports(): void
     {
-        $this->assertTrue($this->gateway->verifyWebhook([], ''));
+        $this->assertInstanceOf(ChargesPayments::class, $this->gateway);
+        $this->assertInstanceOf(AuthorizesPayments::class, $this->gateway);
+        $this->assertInstanceOf(CapturesPayments::class, $this->gateway);
+        $this->assertInstanceOf(RefundsPayments::class, $this->gateway);
+        $this->assertInstanceOf(VoidsPayments::class, $this->gateway);
+        $this->assertInstanceOf(HandlesCallbacks::class, $this->gateway);
+
+        $this->assertNotInstanceOf(HandlesWebhooks::class, $this->gateway);
     }
 
     private function makePaymentRequest(

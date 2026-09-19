@@ -5,7 +5,13 @@ namespace XLaravel\PaylineQnbDriver;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use XLaravel\Payline\Contracts\AuthorizesPayments;
+use XLaravel\Payline\Contracts\CapturesPayments;
+use XLaravel\Payline\Contracts\ChargesPayments;
 use XLaravel\Payline\Contracts\Gateway;
+use XLaravel\Payline\Contracts\HandlesCallbacks;
+use XLaravel\Payline\Contracts\RefundsPayments;
+use XLaravel\Payline\Contracts\VoidsPayments;
 use XLaravel\Payline\DTOs\CallbackData;
 use XLaravel\Payline\DTOs\CaptureData;
 use XLaravel\Payline\DTOs\PaymentRequest;
@@ -16,7 +22,7 @@ use XLaravel\Payline\Enums\PaymentMethod;
 use XLaravel\Payline\Enums\TransactionStatus;
 use XLaravel\Payline\Enums\TransactionType;
 
-class QnbGateway implements Gateway
+class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayments, Gateway, HandlesCallbacks, RefundsPayments, VoidsPayments
 {
     private const array CURRENCIES = [
         'TRY' => '949',
@@ -159,23 +165,6 @@ class QnbGateway implements Gateway
         );
     }
 
-    public function verifyWebhook(array $payload, string $signature): bool
-    {
-        // QNB does not support server-to-server webhooks
-        return true;
-    }
-
-    public function parseWebhook(array $payload): PaymentResponse
-    {
-        return new PaymentResponse(
-            status: TransactionStatus::Failed,
-            type: TransactionType::Payment,
-            gatewayName: $this->getName(),
-            errorCode: 'NOT_SUPPORTED',
-            errorMessage: 'QNB does not support server-to-server webhooks.',
-        );
-    }
-
     private function initiate(PaymentRequest $data, string $txnType, TransactionType $type): PaymentResponse
     {
         $card = $data->card ?? throw new \InvalidArgumentException('Card is required for QNB payment.');
@@ -255,7 +244,6 @@ class QnbGateway implements Gateway
 
         $status = match (true) {
             $success && $type === TransactionType::Void => TransactionStatus::Voided,
-            $success && $type === TransactionType::Refund => TransactionStatus::Refunded,
             $success => TransactionStatus::Successful,
             default => TransactionStatus::Failed,
         };
