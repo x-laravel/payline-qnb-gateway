@@ -182,6 +182,20 @@ The driver generates a UUID as the QNB `OrderId` for every attempt and records i
 `gateway_transaction_id`. Follow-up operations and reconciliation are keyed on that value,
 not on the merchant reference.
 
+## Amounts
+
+Payline works in the minor unit, QNB's `PurchAmount` is the lira amount with two decimal
+places and a dot, so the driver divides by a hundred on the way out:
+
+| Payline | Sent as | Charged |
+|---------|---------|---------|
+| `109900` | `1099.00` | 1099,00 TL |
+| `10050` | `100.50` | 100,50 TL |
+
+The `Exponent` field in the answer is the number of decimal places the currency has, not a
+statement about the amount that was sent. It reads `2` for lira on every response,
+including one that carries no amount at all.
+
 ## What the Driver Records
 
 QNB answers every operation with the same record, and the driver stores it whole on

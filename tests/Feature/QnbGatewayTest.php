@@ -459,6 +459,33 @@ class QnbGatewayTest extends TestCase
         $this->gateway->pay($this->makePaymentRequest(currency: 'CHF'));
     }
 
+    public function test_pay_sends_a_lira_amount_with_two_decimal_places(): void
+    {
+        Http::fake(['*' => Http::response('<html>form</html>', 200)]);
+
+        $this->gateway->pay($this->makePaymentRequest(amount: 109900));
+
+        Http::assertSent(fn ($r) => $r->data()['PurchAmount'] === '1099.00');
+    }
+
+    public function test_handleCallback_keeps_the_provider_diagnostic(): void
+    {
+        $post = $this->buildCallbackPayload('V034', '-1', '3D Kullanıcı Doğrulama Adımı Başarısız');
+        $post['IrcCode'] = '108';
+        $post['IrcDet'] = 'Cardholder MSISDN not found';
+
+        $response = $this->gateway->handleCallback(new CallbackData(
+            gateway: 'qnb',
+            requestData: $post,
+        ));
+
+        $this->assertSame(TransactionStatus::Failed, $response->status);
+        $this->assertSame('3DS_FAILED', $response->errorCode);
+        $this->assertSame('V034', $response->gatewayResponseCode);
+        $this->assertSame('Cardholder MSISDN not found', $response->gatewayResponseMessage);
+        $this->assertSame('108', $response->metadata['IrcCode']);
+    }
+
     public function test_handleCallback_records_the_provider_envelope(): void
     {
         $post = $this->buildCallbackPayload('00', '1');
