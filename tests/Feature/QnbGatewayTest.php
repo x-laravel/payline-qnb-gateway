@@ -581,6 +581,63 @@ class QnbGatewayTest extends TestCase
         $this->assertSame(TransactionStatus::Unknown, $response->status);
     }
 
+    public function test_query_payment_asks_in_the_currency_of_the_order(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00', 'TxnType' => 'Auth']), 200)]);
+
+        $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001', currency: 'USD'));
+
+        Http::assertSent(fn ($request) => $request->data()['Currency'] === '840');
+    }
+
+    public function test_an_unreadable_inquiry_keeps_the_currency_it_asked_about(): void
+    {
+        Http::fake(['*' => Http::response('', 500)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001', currency: 'EUR'));
+
+        $this->assertSame('EUR', $response->currency);
+    }
+
+    public function test_an_inquiry_that_names_no_currency_keeps_the_one_it_asked_about(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00', 'TxnType' => 'Auth']), 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001', currency: 'USD'));
+
+        $this->assertSame('USD', $response->currency);
+    }
+
+    public function test_a_refund_drops_the_blank_references_qnb_pads_its_answer_with(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody([
+            'ProcReturnCode' => '00',
+            'TxnResult' => 'Success',
+            'HostRefNum' => '',
+            'AuthCode' => '',
+        ]), 200)]);
+
+        $response = $this->gateway->refund(new RefundData(
+            gatewayTransactionId: 'ORD-001',
+            amount: 5000,
+            currency: 'TRY',
+        ));
+
+        $this->assertSame(TransactionStatus::Successful, $response->status);
+        $this->assertNull($response->gatewayOrderId);
+        $this->assertNull($response->gatewayAuthCode);
+    }
+
+    public function test_void_is_sent_in_the_currency_of_the_sale(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00']), 200)]);
+
+        $response = $this->gateway->void(new VoidData(gatewayTransactionId: 'ORD-001', currency: 'USD'));
+
+        Http::assertSent(fn ($request) => $request->data()['Currency'] === '840');
+        $this->assertSame('USD', $response->currency);
+    }
+
     public function test_query_payment_reads_the_delimited_answer_of_a_successful_sale(): void
     {
         Http::fake(['*' => Http::response($this->delimitedBody([

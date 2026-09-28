@@ -138,11 +138,16 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             'SecureType' => 'NonSecure',
             'TxnType'    => 'Void',
             'OrgOrderId' => $data->gatewayTransactionId,
-            'Currency'   => '949',
+            'Currency'   => $this->resolveCurrency($data->currency),
             'Lang'       => $this->config['lang'] ?? 'TR',
         ]);
 
-        return $this->parseNonSecureResponse($response, TransactionType::Void, $data->gatewayTransactionId);
+        return $this->parseNonSecureResponse(
+            $response,
+            TransactionType::Void,
+            $data->gatewayTransactionId,
+            $data->currency,
+        );
     }
 
     public function handleCallback(CallbackData $data): PaymentResponse
@@ -230,7 +235,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             'SecureType' => 'Inquiry',
             'TxnType' => 'OrderInquiry',
             'OrgOrderId' => $orderId,
-            'Currency' => self::CURRENCIES['TRY'],
+            'Currency' => $this->resolveCurrency($query->currency),
             'Lang' => $this->config['lang'] ?? 'TR',
         ]);
 
@@ -242,6 +247,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
                 type: TransactionType::Payment,
                 gatewayName: $this->getName(),
                 gatewayTransactionId: $orderId,
+                currency: $query->currency,
                 errorCode: (string) $response->status(),
                 errorMessage: 'Order inquiry could not be read.',
             );
@@ -272,7 +278,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             gatewayAuthCode: $this->nullIfBlank($data['AuthCode'] ?? null),
             gatewayResponseCode: $procCode,
             gatewayResponseMessage: $this->nullIfBlank($data['ErrMsg'] ?? null),
-            currency: $this->isoCurrency($data['Currency'] ?? null),
+            currency: $this->isoCurrency($data['Currency'] ?? null, $query->currency),
             metadata: $this->withRefundState($data),
             refundedAmount: $found ? $this->refundedAmount($data) : null,
             voided: $found ? $this->isVoided($data) : null,
@@ -359,7 +365,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
                 type: $type,
                 gatewayName: $this->getName(),
                 gatewayTransactionId: $orgOrderId,
-                currency: $currency ?? 'TRY',
+                currency: $currency,
                 errorCode: (string) $response->status(),
                 errorMessage: 'The answer could not be read.',
             );
@@ -379,11 +385,11 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             type: $type,
             gatewayName: $this->getName(),
             gatewayTransactionId: $orgOrderId,
-            gatewayOrderId: $data['HostRefNum'] ?? null,
-            gatewayAuthCode: $data['AuthCode'] ?? null,
+            gatewayOrderId: $this->nullIfBlank($data['HostRefNum'] ?? null),
+            gatewayAuthCode: $this->nullIfBlank($data['AuthCode'] ?? null),
             gatewayResponseCode: $procCode,
-            gatewayResponseMessage: $data['ErrMsg'] ?? null,
-            currency: $currency ?? 'TRY',
+            gatewayResponseMessage: $this->nullIfBlank($data['ErrMsg'] ?? null),
+            currency: $currency,
             errorCode: $success ? null : $procCode,
             errorMessage: $success ? null : ($data['ErrMsg'] ?? 'Transaction failed.'),
             metadata: $data ?: null,
@@ -525,11 +531,11 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
         return $data;
     }
 
-    private function isoCurrency(?string $code): string
+    private function isoCurrency(?string $code, string $fallback = 'TRY'): string
     {
         $iso = array_search($code, self::CURRENCIES, true);
 
-        return $iso === false ? 'TRY' : $iso;
+        return $iso === false ? $fallback : $iso;
     }
 
     private function formatAmount(int $amount): string

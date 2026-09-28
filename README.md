@@ -145,43 +145,22 @@ use XLaravel\Payline\Facades\Payline;
 $response = $order->pay('qnb')->authorize($data);
 
 // 2. Capture later
-Payline::via('qnb')->capture(
-    new CaptureData(
-        gatewayTransactionId: $transaction->gateway_transaction_id,
-        amount: $transaction->amount,
-        currency: $transaction->currency,
-    ),
-    $payment,
-    $transaction,
-);
+Payline::payment($payment)->capture();
 ```
+
+Payline finds the authorization itself and captures it in full. Pass an `amount` in minor
+units to collect part of it, and an `idempotencyKey` to make a retry safe.
 
 ### Refund
 
 ```php
-use XLaravel\Payline\DTOs\RefundData;
-
-Payline::via('qnb')->refund(
-    new RefundData(
-        gatewayTransactionId: $transaction->gateway_transaction_id,
-        amount: 5000, // kuruş
-        currency: 'TRY',
-    ),
-    $payment,
-    $transaction,
-);
+Payline::payment($payment)->refund(amount: 5000);
 ```
 
 ### Void (Cancel)
 
 ```php
-use XLaravel\Payline\DTOs\VoidData;
-
-Payline::via('qnb')->void(
-    new VoidData(gatewayTransactionId: $transaction->gateway_transaction_id),
-    $payment,
-    $transaction,
-);
+Payline::payment($payment)->void();
 ```
 
 ## Supported Currencies
