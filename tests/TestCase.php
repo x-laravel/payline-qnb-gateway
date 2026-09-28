@@ -32,7 +32,7 @@ class TestCase extends Orchestra
             'user_name' => 'TEST_USER',
             'password' => 'TEST_PASSWORD',
             'merchant_pass' => 'TEST_MERCHANT_PASS',
-            'endpoint' => 'https://vpostest.qnbfinansbank.com/Gateway/Default.aspx',
+            'test_mode' => true,
             'lang' => 'TR',
         ]);
     }

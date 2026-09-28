@@ -701,17 +701,37 @@ class QnbGatewayTest extends TestCase
         Http::assertSent(fn ($r) => str_contains($r->url(), '/Gateway/JsonGate.aspx'));
     }
 
-    public function test_the_json_gateway_can_be_configured_outright(): void
+    public function test_test_mode_reaches_the_test_host(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00']), 200)]);
+
+        $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        Http::assertSent(fn ($r) => str_starts_with($r->url(), 'https://vpostest.qnb.com.tr/'));
+    }
+
+    public function test_the_live_host_is_used_without_test_mode(): void
+    {
+        $gateway = new QnbGateway(array_merge($this->config, ['test_mode' => false]));
+
+        Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00']), 200)]);
+
+        $gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        Http::assertSent(fn ($r) => str_starts_with($r->url(), 'https://vpos.qnb.com.tr/'));
+    }
+
+    public function test_a_configured_base_url_wins_over_both_hosts(): void
     {
         $gateway = new QnbGateway(array_merge($this->config, [
-            'json_endpoint' => 'https://elsewhere.test/Gateway/JsonGate.aspx',
+            'base_url' => 'https://elsewhere.test',
         ]));
 
         Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00']), 200)]);
 
         $gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
 
-        Http::assertSent(fn ($r) => str_starts_with($r->url(), 'https://elsewhere.test/'));
+        Http::assertSent(fn ($r) => $r->url() === 'https://elsewhere.test/Gateway/JsonGate.aspx');
     }
 
     public function test_query_payment_reads_the_nested_payment_request(): void

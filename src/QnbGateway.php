@@ -29,6 +29,10 @@ use XLaravel\Payline\Enums\TransactionType;
 
 class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayments, Gateway, HandlesCallbacks, ProvidesGatewayCapabilities, QueriesPayments, RefundsPayments, VoidsPayments
 {
+    private const string TEST_BASE_URL = 'https://vpostest.qnb.com.tr';
+
+    private const string LIVE_BASE_URL = 'https://vpos.qnb.com.tr';
+
     private const array CURRENCIES = [
         'TRY' => '949',
         'USD' => '840',
@@ -46,7 +50,13 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
 
     private const int THREE_DS_SESSION_MINUTES = 30;
 
-    public function __construct(private readonly array $config) {}
+    private readonly string $baseUrl;
+
+    public function __construct(private readonly array $config)
+    {
+        $this->baseUrl = $config['base_url']
+            ?? (($config['test_mode'] ?? false) ? self::TEST_BASE_URL : self::LIVE_BASE_URL);
+    }
 
     public function getName(): string
     {
@@ -301,7 +311,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
 
         $hash = $this->buildPaymentHash($orderId, $amount, $okUrl, $failUrl, $txnType, $installment, $rnd);
 
-        $response = Http::asForm()->post($this->config['endpoint'], [
+        $response = Http::asForm()->post($this->endpoint(), [
             'MbrId'            => $this->config['mbr_id'],
             'MerchantID'       => $this->config['merchant_id'],
             'UserCode'         => $this->config['user_name'],
@@ -466,10 +476,14 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
         return $data;
     }
 
+    private function endpoint(): string
+    {
+        return $this->baseUrl . '/Gateway/Default.aspx';
+    }
+
     private function jsonEndpoint(): string
     {
-        return $this->config['json_endpoint']
-            ?? str_replace('Default.aspx', 'JsonGate.aspx', $this->config['endpoint']);
+        return $this->baseUrl . '/Gateway/JsonGate.aspx';
     }
 
     private function operationType(string $txnType): TransactionType

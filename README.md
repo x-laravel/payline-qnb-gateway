@@ -31,8 +31,6 @@ Add the `qnb` block to `config/payline.php` under `gateways`:
         'user_name'     => env('QNB_USER_NAME'),
         'password'      => env('QNB_PASSWORD'),
         'merchant_pass' => env('QNB_MERCHANT_PASS'),
-        'endpoint'      => env('QNB_ENDPOINT', 'https://vpostest.qnb.com.tr/Gateway/Default.aspx'),
-        'json_endpoint' => env('QNB_JSON_ENDPOINT'),
         'lang'          => env('QNB_LANG', 'TR'),
         'three_ds_session_minutes' => env('QNB_3DS_SESSION_MINUTES', 30),
     ],
@@ -43,26 +41,38 @@ Set the corresponding environment variables in `.env`:
 
 ```dotenv
 PAYLINE_GATEWAY=qnb
+PAYLINE_TEST_MODE=true
 
 QNB_MBR_ID=5
 QNB_MERCHANT_ID=your-merchant-id
 QNB_USER_NAME=your-user-name
 QNB_PASSWORD=your-password
 QNB_MERCHANT_PASS=your-merchant-pass
-QNB_ENDPOINT=https://vpos.qnb.com.tr/Gateway/Default.aspx
 ```
 
-> **Sandbox endpoint:** `https://vpostest.qnb.com.tr/Gateway/Default.aspx`  
-> **Production endpoint:** `https://vpos.qnb.com.tr/Gateway/Default.aspx`
+## Test and Live
+
+The gateway ships both QNB addresses and picks between them with `payline.test_mode`:
+
+| `test_mode` | Host |
+|-------------|------|
+| `true` | `https://vpostest.qnb.com.tr` |
+| `false` | `https://vpos.qnb.com.tr` |
+
+`PAYLINE_TEST_MODE` defaults to `false`, so an installation that never sets it talks to
+the live one. Each environment issues its own merchant identifier, user name and
+passwords, so switching the flag also means switching those values.
+
+A `base_url` in the `qnb` block wins over both, for a merchant QNB handed an address of
+its own. It carries a scheme and a host only; the gateway appends its own paths.
 
 QNB answers the same request in a different format per gateway page. The 3D Secure step
-has to come back as an HTML form, so it goes to `Default.aspx`. Everything else goes to
-`JsonGate.aspx`, which takes the same form encoded request and answers JSON under a
-`PaymentRequest` key. The gateway derives that address from `endpoint`; set
-`json_endpoint` when the two do not sit next to each other.
+has to come back as an HTML form, so it goes to `/Gateway/Default.aspx`. Everything else
+goes to `/Gateway/JsonGate.aspx`, which takes the same form encoded request and answers
+JSON under a `PaymentRequest` key. Both are built from the same host.
 
-`Default.aspx` answers `key=value` pairs joined by `;;` on one line. The gateway still
-reads that format, for a merchant who points both keys at it.
+`Default.aspx` answers `key=value` pairs joined by `;;` on one line, and the gateway
+still reads that format.
 
 ## Unfinished 3D Secure
 
