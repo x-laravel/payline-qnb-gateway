@@ -499,6 +499,87 @@ class QnbGatewayTest extends TestCase
         $this->assertSame('a+b/c==', $response->metadata['ResponseHash']);
     }
 
+    public function test_the_inquiry_goes_to_the_json_gateway(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00', 'TxnType' => 'Auth']), 200)]);
+
+        $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        Http::assertSent(fn ($r) => str_contains($r->url(), '/Gateway/JsonGate.aspx'));
+    }
+
+    public function test_the_json_gateway_can_be_configured_outright(): void
+    {
+        $gateway = new QnbGateway(array_merge($this->config, [
+            'json_endpoint' => 'https://elsewhere.test/Gateway/JsonGate.aspx',
+        ]));
+
+        Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00']), 200)]);
+
+        $gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        Http::assertSent(fn ($r) => str_starts_with($r->url(), 'https://elsewhere.test/'));
+    }
+
+    public function test_query_payment_reads_the_nested_payment_request(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody([
+            'TxnType' => 'Auth',
+            'ProcReturnCode' => '00',
+            'HostRefNum' => '627114307385',
+            'AuthCode' => 'S26611',
+            'Currency' => 949,
+            'RefundedAmount' => 0.0,
+            'PurchAmount' => 350.0,
+        ]), 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Successful, $response->status);
+        $this->assertSame('627114307385', $response->gatewayOrderId);
+        $this->assertSame('S26611', $response->gatewayAuthCode);
+        $this->assertSame('TRY', $response->currency);
+        $this->assertSame('none', $response->metadata['refund_state']);
+    }
+
+    public function test_query_payment_reads_a_numeric_refunded_amount(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody([
+            'TxnType' => 'Auth',
+            'ProcReturnCode' => '00',
+            'PurchAmount' => 350.0,
+            'RefundedAmount' => 350.0,
+        ]), 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame('refunded', $response->metadata['refund_state']);
+    }
+
+    public function test_an_order_the_bank_cannot_find_is_unknown_rather_than_failed(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody([
+            'TxnType' => 'OrderInquiry',
+            'ProcReturnCode' => 'V013',
+            'ErrMsg' => 'Seçili İşlem Bulunamadı!',
+            'TxnResult' => 'Failed',
+        ]), 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Unknown, $response->status);
+        $this->assertSame('V013', $response->gatewayResponseCode);
+    }
+
+    public function test_an_unreadable_inquiry_answer_is_unknown(): void
+    {
+        Http::fake(['*' => Http::response('<html>bir hata sayfası</html>', 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Unknown, $response->status);
+    }
+
     public function test_query_payment_requires_the_provider_order_id(): void
     {
         $this->expectException(InvalidArgumentException::class);
@@ -614,7 +695,7 @@ class QnbGatewayTest extends TestCase
 
     public function test_refund_sends_correct_request_and_returns_refunded_status(): void
     {
-        Http::fake(['*' => Http::response('ProcReturnCode=00&TxnResult=Success&HostRefNum=REF999', 200)]);
+        Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00', 'TxnResult' => 'Success', 'HostRefNum' => 'REF999']), 200)]);
 
         $response = $this->gateway->refund(new RefundData(
             gatewayTransactionId: 'ORD-001',
@@ -636,7 +717,7 @@ class QnbGatewayTest extends TestCase
 
     public function test_void_sends_correct_request_and_returns_voided_status(): void
     {
-        Http::fake(['*' => Http::response('ProcReturnCode=00&TxnResult=Success', 200)]);
+        Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00', 'TxnResult' => 'Success']), 200)]);
 
         $response = $this->gateway->void(new VoidData(gatewayTransactionId: 'ORD-001'));
 
@@ -649,7 +730,7 @@ class QnbGatewayTest extends TestCase
 
     public function test_capture_sends_correct_request_and_returns_successful_status(): void
     {
-        Http::fake(['*' => Http::response('ProcReturnCode=00&TxnResult=Success', 200)]);
+        Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00', 'TxnResult' => 'Success']), 200)]);
 
         $response = $this->gateway->capture(new CaptureData(
             gatewayTransactionId: 'ORD-001',
@@ -664,9 +745,60 @@ class QnbGatewayTest extends TestCase
             && $r->data()['OrgOrderId'] === 'ORD-001');
     }
 
+    public function test_the_follow_up_operations_go_to_the_json_gateway(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00', 'TxnResult' => 'Success']), 200)]);
+
+        $this->gateway->refund(new RefundData(gatewayTransactionId: 'ORD-001', amount: 5000, currency: 'TRY'));
+        $this->gateway->void(new VoidData(gatewayTransactionId: 'ORD-001'));
+        $this->gateway->capture(new CaptureData(gatewayTransactionId: 'ORD-001', amount: 5000, currency: 'TRY'));
+
+        Http::assertSentCount(3);
+        Http::recorded(function ($request) {
+            $this->assertStringContainsString('/Gateway/JsonGate.aspx', $request->url());
+
+            return true;
+        });
+    }
+
+    public function test_the_charge_stays_on_the_default_gateway(): void
+    {
+        Http::fake(['*' => Http::response('<html>form</html>', 200)]);
+
+        $this->gateway->pay($this->makePaymentRequest());
+
+        Http::assertSent(fn ($r) => str_contains($r->url(), '/Gateway/Default.aspx'));
+    }
+
+    public function test_an_unreadable_refund_answer_is_unknown_rather_than_failed(): void
+    {
+        Http::fake(['*' => Http::response('<html>bir hata sayfası</html>', 200)]);
+
+        $response = $this->gateway->refund(new RefundData(
+            gatewayTransactionId: 'ORD-001',
+            amount: 5000,
+            currency: 'TRY',
+        ));
+
+        $this->assertSame(TransactionStatus::Unknown, $response->status);
+    }
+
+    public function test_an_unreachable_refund_endpoint_is_unknown_rather_than_failed(): void
+    {
+        Http::fake(['*' => Http::response('', 500)]);
+
+        $response = $this->gateway->refund(new RefundData(
+            gatewayTransactionId: 'ORD-001',
+            amount: 5000,
+            currency: 'TRY',
+        ));
+
+        $this->assertSame(TransactionStatus::Unknown, $response->status);
+    }
+
     public function test_refund_returns_failed_on_non_00_proc_code(): void
     {
-        Http::fake(['*' => Http::response('ProcReturnCode=05&ErrMsg=Do+not+honor', 200)]);
+        Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '05', 'ErrMsg' => 'Do not honor']), 200)]);
 
         $response = $this->gateway->refund(new RefundData(
             gatewayTransactionId: 'ORD-001',
@@ -800,6 +932,16 @@ class QnbGatewayTest extends TestCase
                 cvv: '123',
             ),
         );
+    }
+
+    private function jsonBody(array $fields): string
+    {
+        return json_encode([
+            'PaymentRequest' => $fields,
+            'PaymentAddress' => [],
+            'ExtraParameters' => [],
+            'IsOnUsCard' => false,
+        ]);
     }
 
     private function delimitedBody(array $fields): string

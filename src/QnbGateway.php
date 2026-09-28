@@ -40,6 +40,8 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
 
     private const int PRE_AUTH_CAPTURE_DAYS = 25;
 
+    private const string ORDER_NOT_FOUND = 'V013';
+
     public function __construct(private readonly array $config) {}
 
     public function getName(): string
@@ -78,7 +80,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
 
     public function capture(CaptureData $data): PaymentResponse
     {
-        $response = Http::asForm()->post($this->config['endpoint'], [
+        $response = Http::asForm()->post($this->jsonEndpoint(), [
             'MbrId'       => $this->config['mbr_id'],
             'MerchantId'  => $this->config['merchant_id'],
             'UserCode'    => $this->config['user_name'],
@@ -101,7 +103,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
 
     public function refund(RefundData $data): PaymentResponse
     {
-        $response = Http::asForm()->post($this->config['endpoint'], [
+        $response = Http::asForm()->post($this->jsonEndpoint(), [
             'MbrId'       => $this->config['mbr_id'],
             'MerchantId'  => $this->config['merchant_id'],
             'UserCode'    => $this->config['user_name'],
@@ -124,7 +126,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
 
     public function void(VoidData $data): PaymentResponse
     {
-        $response = Http::asForm()->post($this->config['endpoint'], [
+        $response = Http::asForm()->post($this->jsonEndpoint(), [
             'MbrId'      => $this->config['mbr_id'],
             'MerchantId' => $this->config['merchant_id'],
             'UserCode'   => $this->config['user_name'],
@@ -216,7 +218,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
         $orderId = $query->gatewayTransactionId
             ?? throw new InvalidArgumentException('QNB requires the provider order id to query a payment.');
 
-        $response = Http::asForm()->post($this->config['endpoint'], [
+        $response = Http::asForm()->post($this->jsonEndpoint(), [
             'MbrId' => $this->config['mbr_id'],
             'MerchantId' => $this->config['merchant_id'],
             'UserCode' => $this->config['user_name'],
@@ -228,22 +230,24 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             'Lang' => $this->config['lang'] ?? 'TR',
         ]);
 
-        if (! $response->successful()) {
+        $data = $response->successful() ? $this->decodeBody($response->body()) : null;
+
+        if ($data === null) {
             return new PaymentResponse(
                 status: TransactionStatus::Unknown,
                 type: TransactionType::Payment,
                 gatewayName: $this->getName(),
                 gatewayTransactionId: $orderId,
                 errorCode: (string) $response->status(),
-                errorMessage: 'Order inquiry failed.',
+                errorMessage: 'Order inquiry could not be read.',
             );
         }
 
-        $data = $this->parseResponseBody($response->body());
         $type = $this->operationType($data['TxnType'] ?? '');
-        $procCode = $data['ProcReturnCode'] ?? '';
+        $procCode = (string) ($data['ProcReturnCode'] ?? '');
 
         $status = match (true) {
+            $procCode === self::ORDER_NOT_FOUND => TransactionStatus::Unknown,
             $this->isVoided($data) => TransactionStatus::Voided,
             $procCode === '00' => $type === TransactionType::Authorization
                 ? TransactionStatus::Authorized
@@ -332,20 +336,21 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
         string $orgOrderId,
         ?string $currency = null,
     ): PaymentResponse {
-        if (! $response->successful()) {
+        $data = $response->successful() ? $this->decodeBody($response->body()) : null;
+
+        if ($data === null) {
             return new PaymentResponse(
-                status: TransactionStatus::Failed,
+                status: TransactionStatus::Unknown,
                 type: $type,
                 gatewayName: $this->getName(),
                 gatewayTransactionId: $orgOrderId,
                 currency: $currency ?? 'TRY',
                 errorCode: (string) $response->status(),
-                errorMessage: 'Request failed.',
+                errorMessage: 'The answer could not be read.',
             );
         }
 
-        $data = $this->parseResponseBody($response->body());
-        $procCode = $data['ProcReturnCode'] ?? '';
+        $procCode = (string) ($data['ProcReturnCode'] ?? '');
         $success = $procCode === '00' || ($data['TxnResult'] ?? '') === 'Success';
 
         $status = match (true) {
@@ -409,19 +414,20 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
         );
     }
 
-    private function parseResponseBody(string $body): array
+    private function decodeBody(string $body): ?array
     {
+        $body = trim($body);
         $json = json_decode($body, true);
+
         if (json_last_error() === JSON_ERROR_NONE && is_array($json)) {
-            return $json;
+            return $json['PaymentRequest'] ?? $json;
         }
 
         if (str_contains($body, ';;')) {
             return $this->parseDelimitedBody($body);
         }
 
-        parse_str(str_replace(["\r\n", "\r", "\n"], '&', trim($body)), $parsed);
-        return $parsed ?: [];
+        return null;
     }
 
     private function parseDelimitedBody(string $body): array
@@ -437,6 +443,12 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
         }
 
         return $data;
+    }
+
+    private function jsonEndpoint(): string
+    {
+        return $this->config['json_endpoint']
+            ?? str_replace('Default.aspx', 'JsonGate.aspx', $this->config['endpoint']);
     }
 
     private function operationType(string $txnType): TransactionType

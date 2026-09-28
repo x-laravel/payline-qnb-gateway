@@ -32,6 +32,7 @@ Add the `qnb` block to `config/payline.php` under `gateways`:
         'password'      => env('QNB_PASSWORD'),
         'merchant_pass' => env('QNB_MERCHANT_PASS'),
         'endpoint'      => env('QNB_ENDPOINT', 'https://vpostest.qnb.com.tr/Gateway/Default.aspx'),
+        'json_endpoint' => env('QNB_JSON_ENDPOINT'),
         'lang'          => env('QNB_LANG', 'TR'),
     ],
 ],
@@ -52,6 +53,15 @@ QNB_ENDPOINT=https://vpos.qnb.com.tr/Gateway/Default.aspx
 
 > **Sandbox endpoint:** `https://vpostest.qnb.com.tr/Gateway/Default.aspx`  
 > **Production endpoint:** `https://vpos.qnb.com.tr/Gateway/Default.aspx`
+
+QNB answers the same request in a different format per gateway page. The 3D Secure step
+has to come back as an HTML form, so it goes to `Default.aspx`. Everything else goes to
+`JsonGate.aspx`, which takes the same form encoded request and answers JSON under a
+`PaymentRequest` key. The driver derives that address from `endpoint`; set
+`json_endpoint` when the two do not sit next to each other.
+
+`Default.aspx` answers `key=value` pairs joined by `;;` on one line. The driver still
+reads that format, for a merchant who points both keys at it.
 
 ## Usage
 
@@ -181,6 +191,11 @@ Payline::via('qnb')->void(
 The driver generates a UUID as the QNB `OrderId` for every attempt and records it as
 `gateway_transaction_id`. Follow-up operations and reconciliation are keyed on that value,
 not on the merchant reference.
+
+An answer the driver cannot read, and an order the bank reports as `V013`, leave the
+transaction `unknown` rather than `failed`. A refund the bank accepted but Payline
+recorded as failed would not consume the refund ceiling, and the next attempt would
+return the money twice.
 
 The driver declares the table above through `ProvidesGatewayCapabilities`, so commission
 routing skips it for a request it cannot take: an operation it does not implement, a card
