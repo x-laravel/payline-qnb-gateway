@@ -416,8 +416,27 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             return $json;
         }
 
+        if (str_contains($body, ';;')) {
+            return $this->parseDelimitedBody($body);
+        }
+
         parse_str(str_replace(["\r\n", "\r", "\n"], '&', trim($body)), $parsed);
         return $parsed ?: [];
+    }
+
+    private function parseDelimitedBody(string $body): array
+    {
+        $data = [];
+
+        foreach (explode(';;', trim($body)) as $pair) {
+            [$key, $value] = array_pad(explode('=', $pair, 2), 2, null);
+
+            if (trim($key) !== '') {
+                $data[trim($key)] = $value;
+            }
+        }
+
+        return $data;
     }
 
     private function operationType(string $txnType): TransactionType

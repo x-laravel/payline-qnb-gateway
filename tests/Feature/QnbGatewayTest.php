@@ -445,6 +445,60 @@ class QnbGatewayTest extends TestCase
         $this->assertSame(TransactionStatus::Unknown, $response->status);
     }
 
+    public function test_query_payment_reads_the_delimited_answer_of_a_successful_sale(): void
+    {
+        Http::fake(['*' => Http::response($this->delimitedBody([
+            'TxnType' => 'Auth',
+            'TxnResult' => 'Success',
+            'ProcReturnCode' => '00',
+            'ErrMsg' => 'Onaylandı',
+            'HostRefNum' => '627114307385',
+            'AuthCode' => 'S26611',
+            'IsVoided' => 'false',
+            'RefundedAmount' => '0',
+            'PurchAmount' => '350.00',
+            'Currency' => '949',
+        ]), 200, ['Content-Type' => 'text/plain; charset=utf-8'])]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Successful, $response->status);
+        $this->assertSame('627114307385', $response->gatewayOrderId);
+        $this->assertSame('S26611', $response->gatewayAuthCode);
+        $this->assertSame('none', $response->metadata['refund_state']);
+    }
+
+    public function test_query_payment_reads_the_delimited_answer_of_a_declined_sale(): void
+    {
+        Http::fake(['*' => Http::response($this->delimitedBody([
+            'TxnType' => 'Auth',
+            'TxnResult' => 'Failed',
+            'ProcReturnCode' => 'MR15',
+            'ErrMsg' => '3D Secure Authorize Error',
+            'HostRefNum' => '',
+            'IsVoided' => 'false',
+        ]), 200, ['Content-Type' => 'text/plain; charset=utf-8'])]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Failed, $response->status);
+        $this->assertSame('MR15', $response->gatewayResponseCode);
+        $this->assertSame('3D Secure Authorize Error', $response->gatewayResponseMessage);
+    }
+
+    public function test_query_payment_keeps_base64_values_of_a_delimited_answer_intact(): void
+    {
+        Http::fake(['*' => Http::response($this->delimitedBody([
+            'ProcReturnCode' => '00',
+            'TxnType' => 'Auth',
+            'ResponseHash' => 'a+b/c==',
+        ]), 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame('a+b/c==', $response->metadata['ResponseHash']);
+    }
+
     public function test_query_payment_requires_the_provider_order_id(): void
     {
         $this->expectException(InvalidArgumentException::class);
@@ -624,6 +678,55 @@ class QnbGatewayTest extends TestCase
         $this->assertSame('05', $response->errorCode);
     }
 
+    public function test_refund_reads_a_delimited_answer(): void
+    {
+        Http::fake(['*' => Http::response($this->delimitedBody([
+            'TxnResult' => 'Success',
+            'ProcReturnCode' => '00',
+            'HostRefNum' => 'REF999',
+        ]), 200)]);
+
+        $response = $this->gateway->refund(new RefundData(
+            gatewayTransactionId: 'ORD-001',
+            amount: 5000,
+            currency: 'TRY',
+        ));
+
+        $this->assertSame(TransactionStatus::Successful, $response->status);
+        $this->assertSame('REF999', $response->gatewayOrderId);
+    }
+
+    public function test_void_reads_a_delimited_answer(): void
+    {
+        Http::fake(['*' => Http::response($this->delimitedBody([
+            'TxnResult' => 'Success',
+            'ProcReturnCode' => '00',
+        ]), 200)]);
+
+        $response = $this->gateway->void(new VoidData(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Voided, $response->status);
+    }
+
+    public function test_a_declined_refund_reads_the_delimited_reason(): void
+    {
+        Http::fake(['*' => Http::response($this->delimitedBody([
+            'TxnResult' => 'Failed',
+            'ProcReturnCode' => '05',
+            'ErrMsg' => 'Red-Onaylanmadı',
+        ]), 200)]);
+
+        $response = $this->gateway->refund(new RefundData(
+            gatewayTransactionId: 'ORD-001',
+            amount: 5000,
+            currency: 'TRY',
+        ));
+
+        $this->assertSame(TransactionStatus::Failed, $response->status);
+        $this->assertSame('05', $response->errorCode);
+        $this->assertSame('Red-Onaylanmadı', $response->errorMessage);
+    }
+
     public function test_get_name_returns_qnb(): void
     {
         $this->assertSame('qnb', $this->gateway->getName());
@@ -697,6 +800,15 @@ class QnbGatewayTest extends TestCase
                 cvv: '123',
             ),
         );
+    }
+
+    private function delimitedBody(array $fields): string
+    {
+        return implode(';;', array_map(
+            fn (string $key, string $value) => "{$key}={$value}",
+            array_keys($fields),
+            $fields,
+        ));
     }
 
     private function buildCallbackPayload(
