@@ -182,6 +182,11 @@ The driver generates a UUID as the QNB `OrderId` for every attempt and records i
 `gateway_transaction_id`. Follow-up operations and reconciliation are keyed on that value,
 not on the merchant reference.
 
+The driver declares the table above through `ProvidesGatewayCapabilities`, so commission
+routing skips it for a request it cannot take: an operation it does not implement, a card
+kind or currency it does not accept, or a charge asked for without 3D Secure. Credit and
+debit cards are both accepted.
+
 ## Amounts
 
 Payline works in the minor unit, QNB's `PurchAmount` is the lira amount with two decimal

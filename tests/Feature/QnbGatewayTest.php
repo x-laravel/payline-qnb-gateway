@@ -10,6 +10,7 @@ use XLaravel\Payline\Contracts\CapturesPayments;
 use XLaravel\Payline\Contracts\ChargesPayments;
 use XLaravel\Payline\Contracts\HandlesCallbacks;
 use XLaravel\Payline\Contracts\HandlesWebhooks;
+use XLaravel\Payline\Contracts\ProvidesGatewayCapabilities;
 use XLaravel\Payline\Contracts\QueriesPayments;
 use XLaravel\Payline\Contracts\RefundsPayments;
 use XLaravel\Payline\Contracts\VoidsPayments;
@@ -20,6 +21,7 @@ use XLaravel\Payline\DTOs\PaymentQuery;
 use XLaravel\Payline\DTOs\PaymentRequest;
 use XLaravel\Payline\DTOs\RefundData;
 use XLaravel\Payline\DTOs\VoidData;
+use XLaravel\Payline\Enums\PaymentMethod;
 use XLaravel\Payline\Enums\TransactionStatus;
 use XLaravel\Payline\Enums\TransactionType;
 use XLaravel\PaylineQnbDriver\QnbGateway;
@@ -636,8 +638,44 @@ class QnbGatewayTest extends TestCase
         $this->assertInstanceOf(VoidsPayments::class, $this->gateway);
         $this->assertInstanceOf(HandlesCallbacks::class, $this->gateway);
         $this->assertInstanceOf(QueriesPayments::class, $this->gateway);
+        $this->assertInstanceOf(ProvidesGatewayCapabilities::class, $this->gateway);
 
         $this->assertNotInstanceOf(HandlesWebhooks::class, $this->gateway);
+    }
+
+    public function test_capabilities_cover_both_card_kinds(): void
+    {
+        $methods = $this->gateway->capabilities()->methods;
+
+        $this->assertContains(PaymentMethod::CreditCard, $methods);
+        $this->assertContains(PaymentMethod::DebitCard, $methods);
+    }
+
+    public function test_capabilities_list_every_currency_the_bank_supports(): void
+    {
+        $this->assertSame(
+            ['TRY', 'USD', 'EUR', 'GBP', 'JPY', 'RUB'],
+            $this->gateway->capabilities()->currencies,
+        );
+    }
+
+    public function test_capabilities_declare_three_d_secure_only(): void
+    {
+        $capabilities = $this->gateway->capabilities();
+
+        $this->assertTrue($capabilities->threeDs);
+        $this->assertFalse($capabilities->nonThreeDs);
+    }
+
+    public function test_capabilities_cover_every_operation_the_driver_implements(): void
+    {
+        $this->assertSame([
+            TransactionType::Payment,
+            TransactionType::Authorization,
+            TransactionType::Capture,
+            TransactionType::Refund,
+            TransactionType::Void,
+        ], $this->gateway->capabilities()->operations);
     }
 
     private function makePaymentRequest(

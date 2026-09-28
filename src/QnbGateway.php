@@ -11,11 +11,13 @@ use XLaravel\Payline\Contracts\CapturesPayments;
 use XLaravel\Payline\Contracts\ChargesPayments;
 use XLaravel\Payline\Contracts\Gateway;
 use XLaravel\Payline\Contracts\HandlesCallbacks;
+use XLaravel\Payline\Contracts\ProvidesGatewayCapabilities;
 use XLaravel\Payline\Contracts\QueriesPayments;
 use XLaravel\Payline\Contracts\RefundsPayments;
 use XLaravel\Payline\Contracts\VoidsPayments;
 use XLaravel\Payline\DTOs\CallbackData;
 use XLaravel\Payline\DTOs\CaptureData;
+use XLaravel\Payline\DTOs\GatewayCapabilities;
 use XLaravel\Payline\DTOs\PaymentQuery;
 use XLaravel\Payline\DTOs\PaymentRequest;
 use XLaravel\Payline\DTOs\PaymentResponse;
@@ -25,7 +27,7 @@ use XLaravel\Payline\Enums\PaymentMethod;
 use XLaravel\Payline\Enums\TransactionStatus;
 use XLaravel\Payline\Enums\TransactionType;
 
-class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayments, Gateway, HandlesCallbacks, QueriesPayments, RefundsPayments, VoidsPayments
+class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayments, Gateway, HandlesCallbacks, ProvidesGatewayCapabilities, QueriesPayments, RefundsPayments, VoidsPayments
 {
     private const array CURRENCIES = [
         'TRY' => '949',
@@ -45,9 +47,23 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
         return 'qnb';
     }
 
-    public function supportedMethods(): array
+    public function capabilities(): GatewayCapabilities
     {
-        return [PaymentMethod::CreditCard];
+        return new GatewayCapabilities(
+            operations: [
+                TransactionType::Payment,
+                TransactionType::Authorization,
+                TransactionType::Capture,
+                TransactionType::Refund,
+                TransactionType::Void,
+            ],
+            methods: [PaymentMethod::CreditCard, PaymentMethod::DebitCard],
+            currencies: array_keys(self::CURRENCIES),
+            threeDs: true,
+            nonThreeDs: false,
+            partialRefunds: true,
+            statusQueries: true,
+        );
     }
 
     public function pay(PaymentRequest $data): PaymentResponse
