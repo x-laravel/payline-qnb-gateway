@@ -1,11 +1,11 @@
-# payline-qnb-driver
+# payline-qnb-gateway
 
-[![Tests](https://github.com/x-laravel/payline-qnb-driver/actions/workflows/tests.yml/badge.svg)](https://github.com/x-laravel/payline-qnb-driver/actions/workflows/tests.yml)
+[![Tests](https://github.com/x-laravel/payline-qnb-gateway/actions/workflows/tests.yml/badge.svg)](https://github.com/x-laravel/payline-qnb-gateway/actions/workflows/tests.yml)
 [![PHP](https://img.shields.io/badge/PHP-8.3%2B-blue)](https://www.php.net)
 [![Laravel](https://img.shields.io/badge/Laravel-12%20|%2013-red)](https://laravel.com)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
 
-QNB Finansbank VPOS driver for [x-laravel/payline](https://github.com/x-laravel/payline).
+QNB Finansbank VPOS gateway for [x-laravel/payline](https://github.com/x-laravel/payline).
 
 ## Requirements
 
@@ -16,7 +16,7 @@ QNB Finansbank VPOS driver for [x-laravel/payline](https://github.com/x-laravel/
 ## Installation
 
 ```bash
-composer require x-laravel/payline-qnb-driver
+composer require x-laravel/payline-qnb-gateway
 ```
 
 ## Configuration
@@ -42,7 +42,7 @@ Add the `qnb` block to `config/payline.php` under `gateways`:
 Set the corresponding environment variables in `.env`:
 
 ```dotenv
-PAYLINE_DRIVER=qnb
+PAYLINE_GATEWAY=qnb
 
 QNB_MBR_ID=5
 QNB_MERCHANT_ID=your-merchant-id
@@ -58,10 +58,10 @@ QNB_ENDPOINT=https://vpos.qnb.com.tr/Gateway/Default.aspx
 QNB answers the same request in a different format per gateway page. The 3D Secure step
 has to come back as an HTML form, so it goes to `Default.aspx`. Everything else goes to
 `JsonGate.aspx`, which takes the same form encoded request and answers JSON under a
-`PaymentRequest` key. The driver derives that address from `endpoint`; set
+`PaymentRequest` key. The gateway derives that address from `endpoint`; set
 `json_endpoint` when the two do not sit next to each other.
 
-`Default.aspx` answers `key=value` pairs joined by `;;` on one line. The driver still
+`Default.aspx` answers `key=value` pairs joined by `;;` on one line. The gateway still
 reads that format, for a merchant who points both keys at it.
 
 ## Unfinished 3D Secure
@@ -74,8 +74,8 @@ ErrMsg: İşlem tamamlanamadı /devam ediyor
 ```
 
 QNB sends the same answer whether the customer walked away an hour ago or is typing the
-one time password right now, so the driver reports it as `Pending` rather than `Failed`.
-Payline settles it as `expired` once the transaction passes the deadline the driver sets
+one time password right now, so the gateway reports it as `Pending` rather than `Failed`.
+Payline settles it as `expired` once the transaction passes the deadline the gateway sets
 from `three_ds_session_minutes`.
 
 `V000` is the only part of that answer worth reading. `TxnStatus` is `N` for a genuine
@@ -116,7 +116,7 @@ if ($response->requiresRedirect()) {
 
 ### Handling the callback
 
-Payline handles the callback automatically via its built-in route (`/payline/callback/qnb`). After 3DS completes, QNB POSTs back to this URL. The driver verifies the response hash and the user is redirected to `payline.callback_success_url` or `payline.callback_failure_url`.
+Payline handles the callback automatically via its built-in route (`/payline/callback/qnb`). After 3DS completes, QNB POSTs back to this URL. The gateway verifies the response hash and the user is redirected to `payline.callback_success_url` or `payline.callback_failure_url`.
 
 You can listen to the dispatched events for any post-payment logic:
 
@@ -186,16 +186,16 @@ Payline::payment($payment)->void();
 | Reconcile   | ✓ | `OrderInquiry`, keyed on the provider order id, reports `RefundedAmount` and the void flag |
 | Webhooks    | ✗ | QNB uses a callback-only flow |
 
-The driver generates a UUID as the QNB `OrderId` for every attempt and records it as
+The gateway generates a UUID as the QNB `OrderId` for every attempt and records it as
 `gateway_transaction_id`. Follow-up operations and reconciliation are keyed on that value,
 not on the merchant reference.
 
-An answer the driver cannot read, and an order the bank reports as `V013`, leave the
+An answer the gateway cannot read, and an order the bank reports as `V013`, leave the
 transaction `unknown` rather than `failed`. A refund the bank accepted but Payline
 recorded as failed would not consume the refund ceiling, and the next attempt would
 return the money twice.
 
-The driver declares the table above through `ProvidesGatewayCapabilities`, so commission
+The gateway declares the table above through `ProvidesGatewayCapabilities`, so commission
 routing skips it for a request it cannot take: an operation it does not implement, a card
 kind or currency it does not accept, or a charge asked for without 3D Secure. Credit and
 debit cards are both accepted.
@@ -203,7 +203,7 @@ debit cards are both accepted.
 ## Amounts
 
 Payline works in the minor unit, QNB's `PurchAmount` is the lira amount with two decimal
-places and a dot, so the driver divides by a hundred on the way out:
+places and a dot, so the gateway divides by a hundred on the way out:
 
 | Payline | Sent as | Charged |
 |---------|---------|---------|
@@ -214,9 +214,9 @@ The `Exponent` field in the answer is the number of decimal places the currency 
 statement about the amount that was sent. It reads `2` for lira on every response,
 including one that carries no amount at all.
 
-## What the Driver Records
+## What the Gateway Records
 
-QNB answers every operation with the same record, and the driver stores it whole on
+QNB answers every operation with the same record, and the gateway stores it whole on
 `payline_transactions.metadata`. Payline merges it into the metadata the application
 supplied, so both survive.
 

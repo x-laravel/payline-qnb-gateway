@@ -1,10 +1,10 @@
 <?php
 
-namespace XLaravel\PaylineQnbDriver\Tests;
+namespace XLaravel\Payline\Gateways\Qnb\Tests;
 
 use Orchestra\Testbench\TestCase as Orchestra;
 use XLaravel\Payline\PaylineServiceProvider;
-use XLaravel\PaylineQnbDriver\QnbServiceProvider;
+use XLaravel\Payline\Gateways\Qnb\QnbServiceProvider;
 
 class TestCase extends Orchestra
 {

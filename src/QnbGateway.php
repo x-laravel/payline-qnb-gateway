@@ -1,6 +1,6 @@
 <?php
 
-namespace XLaravel\PaylineQnbDriver;
+namespace XLaravel\Payline\Gateways\Qnb;
 
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;

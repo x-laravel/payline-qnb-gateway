@@ -1,6 +1,6 @@
 <?php
 
-namespace XLaravel\PaylineQnbDriver\Tests\Feature;
+namespace XLaravel\Payline\Gateways\Qnb\Tests\Feature;
 
 use InvalidArgumentException;
 use Illuminate\Support\Facades\Http;
@@ -24,8 +24,8 @@ use XLaravel\Payline\DTOs\VoidData;
 use XLaravel\Payline\Enums\PaymentMethod;
 use XLaravel\Payline\Enums\TransactionStatus;
 use XLaravel\Payline\Enums\TransactionType;
-use XLaravel\PaylineQnbDriver\QnbGateway;
-use XLaravel\PaylineQnbDriver\Tests\TestCase;
+use XLaravel\Payline\Gateways\Qnb\QnbGateway;
+use XLaravel\Payline\Gateways\Qnb\Tests\TestCase;
 
 class QnbGatewayTest extends TestCase
 {
