@@ -632,7 +632,7 @@ class QnbGatewayTest extends TestCase
     {
         Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00']), 200)]);
 
-        $response = $this->gateway->void(new VoidData(gatewayTransactionId: 'ORD-001', currency: 'USD'));
+        $response = $this->gateway->void(new VoidData(gatewayTransactionId: 'ORD-001', amount: 10000, currency: 'USD'));
 
         Http::assertSent(fn ($request) => $request->data()['Currency'] === '840');
         $this->assertSame('USD', $response->currency);
@@ -912,7 +912,7 @@ class QnbGatewayTest extends TestCase
     {
         Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00', 'TxnResult' => 'Success']), 200)]);
 
-        $response = $this->gateway->void(new VoidData(gatewayTransactionId: 'ORD-001'));
+        $response = $this->gateway->void(new VoidData(gatewayTransactionId: 'ORD-001', amount: 10000));
 
         $this->assertSame(TransactionStatus::Voided, $response->status);
         $this->assertSame(TransactionType::Void, $response->type);
@@ -943,7 +943,7 @@ class QnbGatewayTest extends TestCase
         Http::fake(['*' => Http::response($this->jsonBody(['ProcReturnCode' => '00', 'TxnResult' => 'Success']), 200)]);
 
         $this->gateway->refund(new RefundData(gatewayTransactionId: 'ORD-001', amount: 5000, currency: 'TRY'));
-        $this->gateway->void(new VoidData(gatewayTransactionId: 'ORD-001'));
+        $this->gateway->void(new VoidData(gatewayTransactionId: 'ORD-001', amount: 10000));
         $this->gateway->capture(new CaptureData(gatewayTransactionId: 'ORD-001', amount: 5000, currency: 'TRY'));
 
         Http::assertSentCount(3);
@@ -1028,7 +1028,7 @@ class QnbGatewayTest extends TestCase
             'ProcReturnCode' => '00',
         ]), 200)]);
 
-        $response = $this->gateway->void(new VoidData(gatewayTransactionId: 'ORD-001'));
+        $response = $this->gateway->void(new VoidData(gatewayTransactionId: 'ORD-001', amount: 10000));
 
         $this->assertSame(TransactionStatus::Voided, $response->status);
     }
