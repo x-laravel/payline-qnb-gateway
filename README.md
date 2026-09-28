@@ -78,6 +78,10 @@ one time password right now, so the driver reports it as `Pending` rather than `
 Payline settles it as `expired` once the transaction passes the deadline the driver sets
 from `three_ds_session_minutes`.
 
+`V000` is the only part of that answer worth reading. `TxnStatus` is `N` for a genuine
+rejection too, both for a declined card (`14`) and for a failed 3D Secure step (`MR15`),
+so it says nothing about whether the order is still running.
+
 ## Usage
 
 ### Charging a payment
@@ -200,7 +204,7 @@ Payline::via('qnb')->void(
 | Capture     | ✓ | PostAuth via `OrgOrderId`, partial capture is TRY only |
 | Refund      | ✓ | Partial or full, must fall in a later batch than the sale |
 | Void/Cancel | ✓ | Must fall in the same batch as the sale |
-| Reconcile   | ✓ | `OrderInquiry`, keyed on the provider order id |
+| Reconcile   | ✓ | `OrderInquiry`, keyed on the provider order id, reports `RefundedAmount` and the void flag |
 | Webhooks    | ✗ | QNB uses a callback-only flow |
 
 The driver generates a UUID as the QNB `OrderId` for every attempt and records it as

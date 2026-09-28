@@ -261,17 +261,21 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             default => TransactionStatus::Unknown,
         };
 
+        $found = $status !== TransactionStatus::Unknown;
+
         return new PaymentResponse(
             status: $status,
             type: $type,
             gatewayName: $this->getName(),
             gatewayTransactionId: $orderId,
-            gatewayOrderId: $data['HostRefNum'] ?? null,
-            gatewayAuthCode: $data['AuthCode'] ?? null,
+            gatewayOrderId: $this->nullIfBlank($data['HostRefNum'] ?? null),
+            gatewayAuthCode: $this->nullIfBlank($data['AuthCode'] ?? null),
             gatewayResponseCode: $procCode,
-            gatewayResponseMessage: $data['ErrMsg'] ?? null,
+            gatewayResponseMessage: $this->nullIfBlank($data['ErrMsg'] ?? null),
             currency: $this->isoCurrency($data['Currency'] ?? null),
             metadata: $this->withRefundState($data),
+            refundedAmount: $found ? $this->refundedAmount($data) : null,
+            voided: $found ? $this->isVoided($data) : null,
         );
     }
 
@@ -471,8 +475,19 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
 
     private function isAwaitingCustomer(array $data): bool
     {
-        return ($data['ProcReturnCode'] ?? '') === self::NOT_COMPLETED
-            || ($data['TxnStatus'] ?? '') === 'N';
+        return ($data['ProcReturnCode'] ?? '') === self::NOT_COMPLETED;
+    }
+
+    private function refundedAmount(array $data): ?int
+    {
+        $refunded = $data['RefundedAmount'] ?? null;
+
+        return $refunded === null ? null : (int) round((float) $refunded * 100);
+    }
+
+    private function nullIfBlank(mixed $value): ?string
+    {
+        return blank($value) ? null : (string) $value;
     }
 
     private function isVoided(array $data): bool

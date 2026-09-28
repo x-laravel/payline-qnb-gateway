@@ -480,32 +480,96 @@ class QnbGatewayTest extends TestCase
         $this->assertSame(TransactionStatus::Pending, $response->status);
     }
 
-    public function test_query_payment_leaves_an_order_with_no_transaction_status_pending(): void
+    public function test_query_payment_fails_a_3d_secure_rejection_that_also_reports_no_transaction(): void
     {
         Http::fake(['*' => Http::response($this->jsonBody([
             'TxnType' => 'Auth',
             'TxnResult' => 'Failed',
             'TxnStatus' => 'N',
-            'ProcReturnCode' => '99',
-        ]), 200)]);
-
-        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
-
-        $this->assertSame(TransactionStatus::Pending, $response->status);
-    }
-
-    public function test_query_payment_still_fails_a_settled_decline(): void
-    {
-        Http::fake(['*' => Http::response($this->jsonBody([
-            'TxnType' => 'Auth',
-            'TxnResult' => 'Failed',
-            'TxnStatus' => 'V',
             'ProcReturnCode' => 'MR15',
+            'ErrMsg' => '3D Secure Authorize Error',
         ]), 200)]);
 
         $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
 
         $this->assertSame(TransactionStatus::Failed, $response->status);
+        $this->assertSame('MR15', $response->gatewayResponseCode);
+    }
+
+    public function test_query_payment_fails_a_bank_decline_that_also_reports_no_transaction(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody([
+            'TxnType' => 'Auth',
+            'TxnResult' => 'Failed',
+            'TxnStatus' => 'N',
+            'ProcReturnCode' => '14',
+            'ErrMsg' => 'Geçersiz Hesap Numarası',
+        ]), 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Failed, $response->status);
+        $this->assertSame('Geçersiz Hesap Numarası', $response->gatewayResponseMessage);
+    }
+
+    public function test_query_payment_reports_the_refunded_total_in_minor_units(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody([
+            'TxnType' => 'Auth',
+            'ProcReturnCode' => '00',
+            'PurchAmount' => '350.00',
+            'RefundedAmount' => '120.50',
+        ]), 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(12050, $response->refundedAmount);
+        $this->assertFalse($response->voided);
+    }
+
+    public function test_query_payment_reports_a_void(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody([
+            'TxnType' => 'Auth',
+            'ProcReturnCode' => '00',
+            'IsVoided' => 'true',
+        ]), 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertTrue($response->voided);
+    }
+
+    public function test_query_payment_claims_nothing_about_an_order_it_cannot_find(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody([
+            'ProcReturnCode' => 'V013',
+            'ErrMsg' => 'Seçili İşlem Bulunamadı!',
+            'RefundedAmount' => 0,
+        ]), 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Unknown, $response->status);
+        $this->assertNull($response->refundedAmount);
+        $this->assertNull($response->voided);
+    }
+
+    public function test_query_payment_drops_the_blank_references_of_an_unsettled_order(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody([
+            'TxnType' => 'Auth',
+            'TxnResult' => 'Failed',
+            'TxnStatus' => 'N',
+            'ProcReturnCode' => 'V000',
+            'HostRefNum' => '',
+            'AuthCode' => '',
+        ]), 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertNull($response->gatewayOrderId);
+        $this->assertNull($response->gatewayAuthCode);
     }
 
     public function test_query_payment_stays_unknown_when_the_answer_cannot_be_read(): void
