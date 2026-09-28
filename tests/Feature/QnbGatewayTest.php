@@ -55,6 +55,33 @@ class QnbGatewayTest extends TestCase
         $this->assertTrue($response->requiresRedirect());
     }
 
+    public function test_pay_carries_the_3ds_session_deadline(): void
+    {
+        Http::fake(['*' => Http::response('<html>3ds form</html>', 200)]);
+
+        $response = $this->gateway->pay($this->makePaymentRequest());
+
+        $this->assertNotNull($response->expiresAt);
+        $this->assertSame(
+            now()->addMinutes(30)->format('Y-m-d H:i'),
+            $response->expiresAt->format('Y-m-d H:i'),
+        );
+    }
+
+    public function test_the_3ds_session_deadline_is_configurable(): void
+    {
+        Http::fake(['*' => Http::response('<html>3ds form</html>', 200)]);
+
+        $gateway = new QnbGateway([...$this->config, 'three_ds_session_minutes' => 10]);
+
+        $response = $gateway->pay($this->makePaymentRequest());
+
+        $this->assertSame(
+            now()->addMinutes(10)->format('Y-m-d H:i'),
+            $response->expiresAt->format('Y-m-d H:i'),
+        );
+    }
+
     public function test_authorize_returns_pending_with_authorization_type(): void
     {
         Http::fake([
@@ -434,6 +461,51 @@ class QnbGatewayTest extends TestCase
         $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
 
         $this->assertSame('USD', $response->currency);
+    }
+
+    public function test_query_payment_leaves_an_unfinished_3ds_order_pending(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody([
+            'TxnType' => 'Auth',
+            'TxnResult' => 'Failed',
+            'TxnStatus' => 'N',
+            'ProcReturnCode' => 'V000',
+            'ErrMsg' => 'İşlem tamamlanamadı /devam ediyor',
+            'AuthCode' => '',
+            'HostRefNum' => '',
+        ]), 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Pending, $response->status);
+    }
+
+    public function test_query_payment_leaves_an_order_with_no_transaction_status_pending(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody([
+            'TxnType' => 'Auth',
+            'TxnResult' => 'Failed',
+            'TxnStatus' => 'N',
+            'ProcReturnCode' => '99',
+        ]), 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Pending, $response->status);
+    }
+
+    public function test_query_payment_still_fails_a_settled_decline(): void
+    {
+        Http::fake(['*' => Http::response($this->jsonBody([
+            'TxnType' => 'Auth',
+            'TxnResult' => 'Failed',
+            'TxnStatus' => 'V',
+            'ProcReturnCode' => 'MR15',
+        ]), 200)]);
+
+        $response = $this->gateway->queryPayment(new PaymentQuery(gatewayTransactionId: 'ORD-001'));
+
+        $this->assertSame(TransactionStatus::Failed, $response->status);
     }
 
     public function test_query_payment_stays_unknown_when_the_answer_cannot_be_read(): void

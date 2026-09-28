@@ -42,6 +42,10 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
 
     private const string ORDER_NOT_FOUND = 'V013';
 
+    private const string NOT_COMPLETED = 'V000';
+
+    private const int THREE_DS_SESSION_MINUTES = 30;
+
     public function __construct(private readonly array $config) {}
 
     public function getName(): string
@@ -252,6 +256,7 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             $procCode === '00' => $type === TransactionType::Authorization
                 ? TransactionStatus::Authorized
                 : TransactionStatus::Successful,
+            $this->isAwaitingCustomer($data) => TransactionStatus::Pending,
             ($data['TxnResult'] ?? '') === 'Failed' => TransactionStatus::Failed,
             default => TransactionStatus::Unknown,
         };
@@ -327,7 +332,13 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
             amount: $data->amount,
             currency: $data->currency,
             redirectForm: $response->body(),
+            expiresAt: now()->addMinutes($this->threeDsSessionMinutes()),
         );
+    }
+
+    private function threeDsSessionMinutes(): int
+    {
+        return (int) ($this->config['three_ds_session_minutes'] ?? self::THREE_DS_SESSION_MINUTES);
     }
 
     private function parseNonSecureResponse(
@@ -456,6 +467,12 @@ class QnbGateway implements AuthorizesPayments, CapturesPayments, ChargesPayment
         return $txnType === 'PreAuth'
             ? TransactionType::Authorization
             : TransactionType::Payment;
+    }
+
+    private function isAwaitingCustomer(array $data): bool
+    {
+        return ($data['ProcReturnCode'] ?? '') === self::NOT_COMPLETED
+            || ($data['TxnStatus'] ?? '') === 'N';
     }
 
     private function isVoided(array $data): bool

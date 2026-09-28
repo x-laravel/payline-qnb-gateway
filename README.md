@@ -34,6 +34,7 @@ Add the `qnb` block to `config/payline.php` under `gateways`:
         'endpoint'      => env('QNB_ENDPOINT', 'https://vpostest.qnb.com.tr/Gateway/Default.aspx'),
         'json_endpoint' => env('QNB_JSON_ENDPOINT'),
         'lang'          => env('QNB_LANG', 'TR'),
+        'three_ds_session_minutes' => env('QNB_3DS_SESSION_MINUTES', 30),
     ],
 ],
 ```
@@ -62,6 +63,20 @@ has to come back as an HTML form, so it goes to `Default.aspx`. Everything else 
 
 `Default.aspx` answers `key=value` pairs joined by `;;` on one line. The driver still
 reads that format, for a merchant who points both keys at it.
+
+## Unfinished 3D Secure
+
+An order whose customer has not come back from the 3D Secure page answers `OrderInquiry`
+with `ProcReturnCode` `V000`, `TxnStatus` `N` and `TxnResult` `Failed`:
+
+```
+ErrMsg: İşlem tamamlanamadı /devam ediyor
+```
+
+QNB sends the same answer whether the customer walked away an hour ago or is typing the
+one time password right now, so the driver reports it as `Pending` rather than `Failed`.
+Payline settles it as `expired` once the transaction passes the deadline the driver sets
+from `three_ds_session_minutes`.
 
 ## Usage
 
